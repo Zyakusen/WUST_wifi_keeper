@@ -73,16 +73,19 @@ def check_connectivity():
 def reconnect_wifi():
     """强制重连系统 Wi-Fi"""
     log("WARN", f"正在重连系统 Wi-Fi: {WIFI_NAME}")
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    creationflags = 0
     startupinfo = None
-    if hasattr(subprocess, "STARTUPINFO"):
-        startupinfo = subprocess.STARTUPINFO()
-        startf_useshowwindow = getattr(subprocess, "STARTF_USESHOWWINDOW", None)
-        if startf_useshowwindow is not None:
-            startupinfo.dwFlags |= startf_useshowwindow
-        sw_hide = getattr(subprocess, "SW_HIDE", None)
-        if sw_hide is not None:
-            startupinfo.wShowWindow = sw_hide
+    if os.name == "nt":
+        try:
+            creationflags = subprocess.CREATE_NO_WINDOW
+        except AttributeError:
+            creationflags = 0
+        try:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+        except AttributeError:
+            startupinfo = None
     try:
         subprocess.run(
             ["netsh", "wlan", "connect", f"name={WIFI_NAME}"],
