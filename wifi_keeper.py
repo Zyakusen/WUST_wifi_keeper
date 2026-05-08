@@ -79,16 +79,20 @@ def reconnect_wifi():
         try:
             creationflags = subprocess.CREATE_NO_WINDOW
         except AttributeError:
-            creationflags = 0
+            pass
         try:
             startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
         except AttributeError:
             startupinfo = None
+        else:
+            try:
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+            except AttributeError:
+                pass
     try:
         subprocess.run(
-            ["netsh", "wlan", "connect", f"name={WIFI_NAME}"],
+            ["netsh", "wlan", "connect", f'name="{WIFI_NAME}"'],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
