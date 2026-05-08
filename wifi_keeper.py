@@ -42,6 +42,7 @@ HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
+RECONNECT_DELAY_SECONDS = 5
 
 # 初始化日志文件
 open(LOG_FILE, 'w', encoding='utf-8').close()
@@ -72,12 +73,16 @@ def check_connectivity():
 def reconnect_wifi():
     """强制重连系统 Wi-Fi"""
     log("WARN", f"正在重连系统 Wi-Fi: {WIFI_NAME}")
-    creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     startupinfo = None
-    if hasattr(subprocess, "STARTUPINFO") and hasattr(subprocess, "SW_HIDE"):
+    if hasattr(subprocess, "STARTUPINFO"):
         startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = subprocess.SW_HIDE
+        startf_useshowwindow = getattr(subprocess, "STARTF_USESHOWWINDOW", None)
+        if startf_useshowwindow is not None:
+            startupinfo.dwFlags |= startf_useshowwindow
+        sw_hide = getattr(subprocess, "SW_HIDE", None)
+        if sw_hide is not None:
+            startupinfo.wShowWindow = sw_hide
     try:
         subprocess.run(
             ["netsh", "wlan", "connect", f"name={WIFI_NAME}"],
@@ -89,7 +94,7 @@ def reconnect_wifi():
         )
     except Exception as e:
         log("ERROR", f"重连命令执行异常: {e}")
-    time.sleep(5) 
+    time.sleep(RECONNECT_DELAY_SECONDS) 
 
 def perform_login():
     """发送认证请求"""
