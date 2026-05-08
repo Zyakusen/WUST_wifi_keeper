@@ -84,7 +84,7 @@ def reconnect_wifi():
             startupinfo = subprocess.STARTUPINFO()
         except AttributeError:
             startupinfo = None
-        else:
+        if startupinfo is not None:
             try:
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
@@ -92,7 +92,7 @@ def reconnect_wifi():
                 pass
     try:
         subprocess.run(
-            ["netsh", "wlan", "connect", f'name="{WIFI_NAME}"'],
+            ["netsh", "wlan", "connect", f"name={WIFI_NAME}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
