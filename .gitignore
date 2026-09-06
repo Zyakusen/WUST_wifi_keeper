@@ -5,9 +5,10 @@ __pycache__/
 # 虚拟环境
 .venv/
 
-# PyInstaller 产物
-build/
-dist/
+# Nuitka 产物
+*.build/
+*.dist/
+wifi_keeper.exe
 
 # 运行时生成文件
 wifi_keeper.log

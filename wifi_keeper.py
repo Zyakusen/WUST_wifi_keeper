@@ -6,29 +6,29 @@ import subprocess
 import re
 import json
 import threading
-import tkinter as tk
-from tkinter import messagebox, scrolledtext
+import customtkinter as ctk
+from tkinter import messagebox
 from datetime import datetime
 import pystray
 from PIL import Image, ImageDraw
 
-# 终端日志颜色配置
-class Color:
-    SYSTEM = '\033[96m'
-    SUCCESS = '\033[92m'
-    INFO = '\033[94m'
-    WARN = '\033[93m'
-    ERROR = '\033[91m'
-    PROBE = '\033[37m'
-    RESET = '\033[0m'
+# 路径配置：兼容 PyInstaller / Nuitka 单文件打包环境
+def resolve_script_dir():
+    """确定程序所在目录（配置/日志/图标都存放于此）
 
-os.system('') 
+    Nuitka onefile 下 sys.frozen 为 None、__file__ 在临时解压目录，
+    只有 sys.argv[0] 指向原始 exe 路径，故优先判断 argv[0]。
+    """
+    exe = os.path.abspath(sys.argv[0])
+    if exe.lower().endswith('.exe'):
+        # Nuitka / PyInstaller 单文件：argv[0] 即原始 exe 路径
+        return os.path.dirname(exe)
+    if getattr(sys, 'frozen', False):
+        # PyInstaller（异常情况下 argv[0] 不可靠时的兜底）
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
 
-# 路径配置：兼容 PyInstaller 单文件打包环境
-if getattr(sys, 'frozen', False):
-    SCRIPT_DIR = os.path.dirname(sys.executable)
-else:
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = resolve_script_dir()
 
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "wifi_config.json")
 LOG_FILE = os.path.join(SCRIPT_DIR, "wifi_keeper.log")
@@ -61,7 +61,7 @@ def check_connectivity():
         start_time = time.time()
         response = requests.get("http://www.msftconnecttest.com/connecttest.txt", timeout=3, allow_redirects=False)
         latency = int((time.time() - start_time) * 1000)
-        
+
         if response.status_code == 200 and "Microsoft Connect Test" in response.text:
             log("PROBE", f"广域网畅通 (延迟: {latency}ms)")
             return True
@@ -70,10 +70,14 @@ def check_connectivity():
         return False
 
 def reconnect_wifi():
-    """强制重连系统 Wi-Fi"""
+    """强制重连系统 Wi-Fi（无控制台窗口弹出）"""
     log("WARN", f"正在重连系统 Wi-Fi: {WIFI_NAME}")
-    os.system(f'netsh wlan connect name="{WIFI_NAME}" >nul 2>&1')
-    time.sleep(5) 
+    subprocess.run(
+        ["netsh", "wlan", "connect", f"name={WIFI_NAME}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    time.sleep(5)
 
 def perform_login():
     """发送认证请求"""
@@ -94,7 +98,7 @@ def monitor_loop():
     """核心守护线程"""
     global is_running
     log("SYSTEM", f"后台守护已启动，目标网络: {WIFI_NAME} (nasId: {PAYLOAD['nasId']})")
-    
+
     while is_running:
         if check_connectivity():
             # 正常情况下保持静默并定期轮询
@@ -134,8 +138,35 @@ def save_config(wifi, user, pwd, nas_id):
     except Exception as e:
         log("ERROR", f"配置写入失败: {e}")
 
+def get_icon_file():
+    """定位 icon.ico：优先程序同目录，其次 Nuitka onefile 内置副本"""
+    candidates = [os.path.join(SCRIPT_DIR, "icon.ico")]
+    try:
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico"))
+    except Exception:
+        pass
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+def get_window_icon_path():
+    """窗口图标来源：打包后取 exe 内嵌图标，开发环境用目录内 icon.ico"""
+    if getattr(sys, 'frozen', False):
+        return sys.executable
+    return get_icon_file()
+
 def create_tray_image():
-    """生成系统托盘图标"""
+    """生成系统托盘图标：优先使用 icon.ico，失败时程序绘制"""
+    icon_file = get_icon_file()
+    if icon_file:
+        try:
+            img = Image.open(icon_file).convert("RGBA")
+            img.thumbnail((64, 64), Image.LANCZOS)
+            return img
+        except Exception:
+            pass
+    # 兜底：程序绘制
     image = Image.new('RGB', (64, 64), color=(0, 120, 215))
     dc = ImageDraw.Draw(image)
     dc.rectangle([16, 16, 48, 48], fill="white")
@@ -145,11 +176,26 @@ def setup_gui():
     global is_running, WIFI_NAME, PAYLOAD
     config = load_config()
 
-    root = tk.Tk()
+    ctk.set_appearance_mode("system")
+    ctk.set_default_color_theme("blue")
+
+    root = ctk.CTk()
     root.title("校园网守护")
-    
+
+    # 窗口图标：打包后取 exe 内嵌图标，开发环境用目录内 icon.ico
+    # 注意：Windows 下 iconbitmap 的 default= 形式无效，必须逐窗口设置
+    def apply_window_icon(window):
+        try:
+            icon_path = get_window_icon_path()
+            if icon_path:
+                window.iconbitmap(icon_path)
+        except Exception:
+            pass
+
+    apply_window_icon(root)
+
     # 窗口居中
-    window_width, window_height = 320, 320
+    window_width, window_height = 380, 480
     x = int((root.winfo_screenwidth() - window_width) / 2)
     y = int((root.winfo_screenheight() - window_height) / 2)
     root.geometry(f'{window_width}x{window_height}+{x}+{y}')
@@ -158,25 +204,25 @@ def setup_gui():
     # 拦截关闭按钮行为：转为隐藏
     root.protocol("WM_DELETE_WINDOW", lambda: root.withdraw())
 
-    padding_opt = {'padx': 20, 'pady': 3}
+    padding_opt = {'padx': 20, 'pady': 5}
 
-    tk.Label(root, text="Wi-Fi 名称:").pack(anchor="w", **padding_opt)
-    entry_wifi = tk.Entry(root, width=35)
+    ctk.CTkLabel(root, text="Wi-Fi 名称:").pack(anchor="w", **padding_opt)
+    entry_wifi = ctk.CTkEntry(root, width=320, placeholder_text="如 WUST-WiFi6")
     entry_wifi.pack(**padding_opt)
     entry_wifi.insert(0, config.get('wifi_name', ''))
 
-    tk.Label(root, text="学号 (Username):").pack(anchor="w", **padding_opt)
-    entry_user = tk.Entry(root, width=35)
+    ctk.CTkLabel(root, text="学号 (Username):").pack(anchor="w", **padding_opt)
+    entry_user = ctk.CTkEntry(root, width=320)
     entry_user.pack(**padding_opt)
     entry_user.insert(0, config.get('username', ''))
 
-    tk.Label(root, text="密码 (Password):").pack(anchor="w", **padding_opt)
-    entry_pwd = tk.Entry(root, width=35, show="*")
+    ctk.CTkLabel(root, text="密码 (Password):").pack(anchor="w", **padding_opt)
+    entry_pwd = ctk.CTkEntry(root, width=320, show="*")
     entry_pwd.pack(**padding_opt)
     entry_pwd.insert(0, config.get('password', ''))
 
-    tk.Label(root, text="网关 ID (nasId - 默认填 2):").pack(anchor="w", **padding_opt)
-    entry_nasid = tk.Entry(root, width=35)
+    ctk.CTkLabel(root, text="网关 ID (nasId - 默认填 2):").pack(anchor="w", **padding_opt)
+    entry_nasid = ctk.CTkEntry(root, width=320)
     entry_nasid.pack(**padding_opt)
     entry_nasid.insert(0, config.get('nasId', '2'))
 
@@ -205,18 +251,19 @@ def setup_gui():
         PAYLOAD["username"] = user
         PAYLOAD["password"] = pwd
         PAYLOAD["nasId"] = nas_id
-        
+
         start_monitoring()
 
     def show_log_window():
-        """显示日志查阅窗口"""
-        log_win = tk.Toplevel(root)
+        """显示日志查阅窗口（实时刷新）"""
+        log_win = ctk.CTkToplevel(root)
         log_win.title("运行日志")
-        log_win.geometry("600x400")
-        
-        txt = scrolledtext.ScrolledText(log_win, font=("Consolas", 9), bg="#1e1e1e", fg="#cccccc")
-        txt.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+        log_win.geometry("640x420")
+        apply_window_icon(log_win)
+
+        txt = ctk.CTkTextbox(log_win, font=("Consolas", 12), fg_color="#1e1e1e", text_color="#cccccc")
+        txt.pack(fill="both", expand=True, padx=10, pady=10)
+
         txt.tag_config("SYSTEM", foreground="#56b6c2")
         txt.tag_config("SUCCESS", foreground="#98c379")
         txt.tag_config("INFO", foreground="#61afef")
@@ -224,25 +271,62 @@ def setup_gui():
         txt.tag_config("ERROR", foreground="#e06c75")
         txt.tag_config("PROBE", foreground="#7f848e")
 
-        try:
-            with open(LOG_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    match = re.search(r'\[(SYSTEM|SUCCESS|INFO|WARN|ERROR|PROBE)\]', line)
-                    if match:
-                        txt.insert(tk.END, line, match.group(1))
-                    else:
-                        txt.insert(tk.END, line)
-        except Exception:
-            txt.insert(tk.END, "暂无日志产生。")
+        def insert_line(line):
+            """插入一行日志并按级别着色"""
+            match = re.search(r'\[(SYSTEM|SUCCESS|INFO|WARN|ERROR|PROBE)\]', line)
+            txt.insert("end", line, match.group(1) if match else None)
 
-        txt.see(tk.END)
-        txt.config(state=tk.DISABLED)
+        def load_full():
+            """整体重载日志文件"""
+            txt.configure(state="normal")
+            txt.delete("1.0", "end")
+            try:
+                with open(LOG_FILE, "r", encoding="utf-8") as f:
+                    for line in f:
+                        insert_line(line)
+            except Exception:
+                txt.insert("end", "暂无日志产生。")
+            txt.configure(state="disabled")
+
+        offset = [0]  # 日志文件已读取到的偏移量
+
+        def refresh():
+            """每秒检查一次日志文件，把新增行追加到窗口"""
+            if not log_win.winfo_exists():
+                return
+            try:
+                size = os.path.getsize(LOG_FILE)
+                if size < offset[0]:
+                    # 文件被截断（程序重启等），整体重载
+                    offset[0] = 0
+                    load_full()
+                    txt.see("end")
+                elif size > offset[0]:
+                    was_at_bottom = txt.yview()[1] >= 0.95
+                    txt.configure(state="normal")
+                    with open(LOG_FILE, "r", encoding="utf-8") as f:
+                        f.seek(offset[0])
+                        for line in f:
+                            insert_line(line)
+                        offset[0] = f.tell()
+                    txt.configure(state="disabled")
+                    if was_at_bottom:
+                        txt.see("end")
+            except Exception:
+                pass
+            log_win.after(1000, refresh)
+
+        load_full()
+        txt.see("end")
+        log_win.after(1000, refresh)
 
     # 底部按钮区
-    btn_frame = tk.Frame(root)
+    btn_frame = ctk.CTkFrame(root, fg_color="transparent")
     btn_frame.pack(pady=15)
-    tk.Button(btn_frame, text="保存并隐藏监控", bg="#0078D7", fg="white", width=18, command=on_submit).pack(pady=2)
-    tk.Button(btn_frame, text="查看运行日志", width=18, command=show_log_window).pack(pady=2)
+    ctk.CTkButton(btn_frame, text="保存并隐藏监控", fg_color="#0078D7", hover_color="#005A9E",
+                  text_color="white", width=320, command=on_submit).pack(pady=4)
+    ctk.CTkButton(btn_frame, text="查看运行日志", fg_color="transparent", border_width=1,
+                  width=320, command=show_log_window).pack(pady=4)
 
     # 托盘相关逻辑
     def on_show_window(icon, item):
@@ -275,11 +359,11 @@ def setup_gui():
         PAYLOAD['password'] = config['password']
         # 兼容静默启动时的 nasId 读取
         PAYLOAD['nasId'] = config.get('nasId', '2')
-        
+
         # 隐藏主窗口并直接开启监控任务
         root.withdraw()
         root.after(0, start_monitoring)
-    
+
     root.mainloop()
 
 if __name__ == "__main__":

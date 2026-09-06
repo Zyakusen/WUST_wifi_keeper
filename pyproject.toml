@@ -1,0 +1,17 @@
+[project]
+name = "wifi-keeper"
+version = "0.1.0"
+description = "校园网守护 - 自动保持校园网认证在线"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "pystray>=0.19",
+    "pillow>=10.0",
+    "customtkinter>=5.2",
+]
+
+[dependency-groups]
+dev = [
+    "nuitka>=4.2.1",
+    "zstandard>=0.25.0",
+]
