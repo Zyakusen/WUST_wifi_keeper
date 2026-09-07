@@ -1,0 +1,60 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # action-gh-release 需要
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: wifi_keeper.exe
+            # Windows 专属参数：无控制台窗口 + 内嵌 exe 图标
+            flags: --onefile --windows-console-mode=disable --windows-icon-from-ico=icon.ico --include-package-data=customtkinter --enable-plugin=tk-inter --include-data-files=icon.ico=icon.ico --assume-yes-for-downloads
+          - os: ubuntu-22.04
+            artifact: wifi_keeper.bin
+            # ubuntu-22.04 固定 glibc 2.35 下限，兼容更多发行版
+            flags: --onefile --include-package-data=customtkinter --enable-plugin=tk-inter --include-data-files=icon.ico=icon.ico --assume-yes-for-downloads
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Linux 系统依赖（python3-tk + patchelf）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk patchelf
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: 同步依赖（Linux 必须用系统 Python 以获得 tkinter）
+        if: runner.os == 'Linux'
+        run: uv sync --python-preference only-system
+
+      - name: 同步依赖（Windows）
+        if: runner.os == 'Windows'
+        run: uv sync
+
+      - name: Nuitka 编译
+        run: uv run python -m nuitka ${{ matrix.flags }} wifi_keeper.py
+
+      - name: 上传构建产物（Artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: wifi_keeper-${{ runner.os }}
+          path: ${{ matrix.artifact }}
+
+      - name: 附加到 GitHub Release（仅 tag 触发）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}
