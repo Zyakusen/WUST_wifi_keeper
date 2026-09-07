@@ -330,6 +330,19 @@ def setup_gui():
     root.geometry(f'{window_width}x{window_height}+{x}+{y}')
     root.resizable(False, False)
 
+    tray_icon = {}  # 持有托盘图标引用，供窗口内"退出"按钮调用
+
+    def quit_app():
+        global is_running
+        is_running = False
+        icon = tray_icon.get("icon")
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:
+                pass
+        root.after(0, root.destroy)
+
     # 拦截关闭按钮行为：托盘有菜单时转为隐藏；否则直接退出
     def on_close():
         if TRAY_HAS_MENU:
@@ -474,19 +487,6 @@ def setup_gui():
 
     def on_show_log(icon, item):
         root.after(0, show_log_window)
-
-    tray_icon = {}  # 持有托盘图标引用，供窗口内"退出"按钮调用
-
-    def quit_app():
-        global is_running
-        is_running = False
-        icon = tray_icon.get("icon")
-        if icon is not None:
-            try:
-                icon.stop()
-            except Exception:
-                pass
-        root.after(0, root.destroy)
 
     def on_quit(icon, item):
         quit_app()
