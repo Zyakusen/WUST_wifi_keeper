@@ -22,7 +22,8 @@ jobs:
           - os: ubuntu-22.04
             artifact: wifi_keeper.bin
             # ubuntu-22.04 固定 glibc 2.35 下限，兼容更多发行版
-            flags: --onefile --include-package-data=customtkinter --enable-plugin=tk-inter --include-data-files=icon.ico=icon.ico --assume-yes-for-downloads
+            # 内置中文字体（Noto Sans SC 子集，SIL OFL 1.1）
+            flags: --onefile --include-package-data=customtkinter --enable-plugin=tk-inter --include-data-files=icon.ico=icon.ico --include-data-files=assets/fonts/NotoSansSC-Subset.woff2=assets/fonts/NotoSansSC-Subset.woff2 --include-data-files=assets/fonts/OFL.txt=assets/fonts/OFL.txt --assume-yes-for-downloads
 
     runs-on: ${{ matrix.os }}
     steps:

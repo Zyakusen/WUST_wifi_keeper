@@ -33,7 +33,9 @@
 2. 使用前提：
    - 桌面 Linux + X11 环境。GNOME Wayland 需安装 AppIndicator 扩展（如 "AppIndicator and KStatusNotifierItem Support"），否则托盘图标不可见，程序会保持窗口常驻。
    - 自动重连需要 NetworkManager（`nmcli`）或 iwd（`iwctl`）之一，前者覆盖绝大多数发行版；`iwctl` 通常需要 root 或 iwd 授权组权限。
-3. 也可以源码方式运行（Debian/Ubuntu 需先装 tkinter）：
+   - 界面中文由内置字体（Noto Sans SC 子集，SIL OFL 1.1）渲染，无需安装系统字体。
+3. Linux 托盘限制说明：二进制内置的托盘后端（X11/xorg）**不支持右键菜单**，左键单击图标可唤出窗口；请使用窗口内的"退出"按钮退出程序。源码运行时若安装了 `python3-gi` + AppIndicator，托盘菜单可用。
+4. 也可以源码方式运行（Debian/Ubuntu 需先装 tkinter）：
 
    ```bash
    sudo apt install python3-tk
@@ -78,17 +80,20 @@ uv sync --python-preference only-system
 # 3. 直接运行
 uv run python wifi_keeper.py
 
-# 4. 单文件打包（去掉 Windows 专属参数）
+# 4. 单文件打包（去掉 Windows 专属参数，内置中文字体）
 uv run python -m nuitka --onefile \
     --include-package-data=customtkinter \
     --enable-plugin=tk-inter \
     --include-data-files=icon.ico=icon.ico \
+    --include-data-files=assets/fonts/NotoSansSC-Subset.woff2=assets/fonts/NotoSansSC-Subset.woff2 \
+    --include-data-files=assets/fonts/OFL.txt=assets/fonts/OFL.txt \
     wifi_keeper.py
 ```
 
 编译产物为当前目录下的 `wifi_keeper.bin`。注意：
 - 构建的二进制要求 glibc ≥ 2.35（Ubuntu 22.04+ / Debian 12+ / Fedora 37+），CI 使用 ubuntu-22.04 固定此下限。
 - 建议在干净环境（未安装 `python3-gi`）构建，避免二进制硬依赖 PyGObject。
+- 内置字体为 Noto Sans SC 的 GB2312 子集（SIL OFL 1.1，许可证见 `assets/fonts/OFL.txt`），源码运行时也会自动加载，无需安装系统字体。
 
 ## 免责声明
 

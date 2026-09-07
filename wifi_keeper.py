@@ -90,6 +90,15 @@ def check_connectivity():
         return False
 
 MONO_FONT = ("Consolas", 12) if sys.platform == "win32" else ("DejaVu Sans Mono", 12)
+LOG_FONT = MONO_FONT  # 日志窗口字体（Linux 下由 setup_linux_fonts 覆盖为含中文的字体）
+CJK_FONT_CANDIDATES = (
+    "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "WenQuanYi Micro Hei",
+    "WenQuanYi Zen Hei", "Droid Sans Fallback", "AR PL UMing CN",
+    "Noto Sans CJK JP", "Noto Sans CJK KR",
+)
+# Linux 的 pystray xorg 后端不支持右键菜单；HAS_MENU 为 False 时
+# 窗口保持可见并提供窗口内退出按钮（Windows 行为不变）
+TRAY_HAS_MENU = pystray is not None and getattr(pystray.Icon, "HAS_MENU", True)
 
 def _run_silently(cmd):
     """无窗口执行系统命令（Windows 下避免闪现控制台窗口）"""
@@ -225,6 +234,47 @@ def get_window_icon_path():
         return sys.executable
     return get_icon_file()
 
+def get_bundled_font_file():
+    """定位内置中文字体：优先程序同目录，其次 Nuitka onefile 内置副本"""
+    candidates = [os.path.join(SCRIPT_DIR, "assets", "fonts", "NotoSansSC-Subset.woff2")]
+    try:
+        candidates.append(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "assets", "fonts", "NotoSansSC-Subset.woff2"))
+    except Exception:
+        pass
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+def setup_linux_fonts(root):
+    """Linux：注册内置中文字体并从已安装字体中挑选含中文的字体族
+
+    Tk/X11 不保证对缺失字形做字体回退，而默认字体（Roboto/DejaVu）没有
+    中文字形，因此必须显式选择含中文的字体族。
+    """
+    global LOG_FONT
+    try:
+        import tkinter.font as tkfont
+        font_file = get_bundled_font_file()
+        if font_file:
+            # customtkinter 的 FontManager 会将其复制到 ~/.fonts 供 fontconfig 识别
+            ctk.FontManager.load_font(font_file)
+            if shutil.which("fc-cache"):
+                subprocess.run(["fc-cache", "-f", os.path.expanduser("~/.fonts")],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        families = set(tkfont.families(root))
+        for fam in CJK_FONT_CANDIDATES:
+            if fam in families:
+                ctk.ThemeManager.theme["CTkFont"]["family"] = fam
+                tkfont.nametofont("TkDefaultFont").configure(family=fam)
+                LOG_FONT = (fam, 12)
+                log("SYSTEM", f"中文字体: {fam}")
+                return
+    except Exception as e:
+        log("ERROR", f"中文字体设置失败: {e}")
+    log("WARN", "未找到中文字体，界面中文可能无法正常显示（可安装 fonts-noto-cjk）")
+
 def create_tray_image():
     """生成系统托盘图标：优先使用 icon.ico，失败时程序绘制"""
     icon_file = get_icon_file()
@@ -251,6 +301,10 @@ def setup_gui():
     root = ctk.CTk()
     root.title("校园网守护")
 
+    if sys.platform != "win32":
+        # 必须在创建任何控件之前完成字体族切换
+        setup_linux_fonts(root)
+
     # 窗口图标：打包后取 exe 内嵌图标，开发环境用目录内 icon.ico
     # 注意：Windows 下 iconbitmap 的 default= 形式无效，必须逐窗口设置
     def apply_window_icon(window):
@@ -276,8 +330,14 @@ def setup_gui():
     root.geometry(f'{window_width}x{window_height}+{x}+{y}')
     root.resizable(False, False)
 
-    # 拦截关闭按钮行为：转为隐藏
-    root.protocol("WM_DELETE_WINDOW", lambda: root.withdraw())
+    # 拦截关闭按钮行为：托盘有菜单时转为隐藏；否则直接退出
+    def on_close():
+        if TRAY_HAS_MENU:
+            root.withdraw()
+        else:
+            quit_app()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
 
     padding_opt = {'padx': 20, 'pady': 5}
 
@@ -304,7 +364,7 @@ def setup_gui():
     def start_monitoring():
         """启动后台服务"""
         global is_running
-        if pystray is not None:
+        if TRAY_HAS_MENU:
             root.withdraw()
         if not is_running:
             is_running = True
@@ -337,7 +397,7 @@ def setup_gui():
         log_win.geometry("640x420")
         apply_window_icon(log_win)
 
-        txt = ctk.CTkTextbox(log_win, font=MONO_FONT, fg_color="#1e1e1e", text_color="#cccccc")
+        txt = ctk.CTkTextbox(log_win, font=LOG_FONT, fg_color="#1e1e1e", text_color="#cccccc")
         txt.pack(fill="both", expand=True, padx=10, pady=10)
 
         txt.tag_config("SYSTEM", foreground="#56b6c2")
@@ -403,6 +463,10 @@ def setup_gui():
                   text_color="white", width=320, command=on_submit).pack(pady=4)
     ctk.CTkButton(btn_frame, text="查看运行日志", fg_color="transparent", border_width=1,
                   width=320, command=show_log_window).pack(pady=4)
+    if not TRAY_HAS_MENU:
+        # Linux 托盘（xorg 后端）无右键菜单，提供窗口内退出入口
+        ctk.CTkButton(btn_frame, text="退出", fg_color="#d33d3d", hover_color="#b22f2f",
+                      text_color="white", width=320, command=quit_app).pack(pady=4)
 
     # 托盘相关逻辑
     def on_show_window(icon, item):
@@ -411,11 +475,21 @@ def setup_gui():
     def on_show_log(icon, item):
         root.after(0, show_log_window)
 
-    def on_quit(icon, item):
+    tray_icon = {}  # 持有托盘图标引用，供窗口内"退出"按钮调用
+
+    def quit_app():
         global is_running
         is_running = False
-        icon.stop()
+        icon = tray_icon.get("icon")
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:
+                pass
         root.after(0, root.destroy)
+
+    def on_quit(icon, item):
+        quit_app()
 
     def run_tray():
         if pystray is None:
@@ -427,6 +501,7 @@ def setup_gui():
             pystray.MenuItem("退出监控", on_quit)
         )
         icon = pystray.Icon("WiFiKeeper", create_tray_image(), "校园网守护", menu)
+        tray_icon["icon"] = icon
         try:
             icon.run()
         except Exception:
@@ -444,7 +519,7 @@ def setup_gui():
         PAYLOAD['nasId'] = config.get('nasId', '2')
 
         # 隐藏主窗口并直接开启监控任务
-        if pystray is not None:
+        if TRAY_HAS_MENU:
             root.withdraw()
         root.after(0, start_monitoring)
 
