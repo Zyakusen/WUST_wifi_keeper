@@ -9,6 +9,7 @@ __pycache__/
 *.build/
 *.dist/
 wifi_keeper.exe
+wifi_keeper.bin
 
 # 运行时生成文件
 wifi_keeper.log

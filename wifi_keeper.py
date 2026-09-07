@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import shutil
 import requests
 import subprocess
 import re
@@ -9,19 +10,37 @@ import threading
 import customtkinter as ctk
 from tkinter import messagebox
 from datetime import datetime
-import pystray
+try:
+    import pystray
+except Exception:
+    pystray = None
 from PIL import Image, ImageDraw
+try:
+    from PIL import ImageTk
+except ImportError:
+    ImageTk = None
 
 # 路径配置：兼容 PyInstaller / Nuitka 单文件打包环境
 def resolve_script_dir():
     """确定程序所在目录（配置/日志/图标都存放于此）
 
-    Nuitka onefile 下 sys.frozen 为 None、__file__ 在临时解压目录，
-    只有 sys.argv[0] 指向原始 exe 路径，故优先判断 argv[0]。
+    优先取 Nuitka 的 __compiled__.containing_dir（原始可执行文件所在目录，
+    onefile/standalone 通用）；否则回退：单文件模式下 sys.frozen 为 None、
+    __file__ 在临时解压目录，只有 sys.argv[0] 指向原始可执行文件路径。
     """
+    if "__compiled__" in globals():
+        # Nuitka：__compiled__.containing_dir 恒为原始可执行文件所在目录
+        # （onefile/standalone 通用，且不受用户改名影响）
+        try:
+            dir_ = __compiled__.containing_dir  # noqa: F821
+            if dir_ and os.path.isdir(dir_):
+                return dir_
+        except Exception:
+            pass
     exe = os.path.abspath(sys.argv[0])
-    if exe.lower().endswith('.exe'):
-        # Nuitka / PyInstaller 单文件：argv[0] 即原始 exe 路径
+    if exe.lower().endswith((".exe", ".bin")):
+        # Nuitka / PyInstaller 单文件：argv[0] 即原始可执行文件路径
+        # （Windows .exe / Linux .bin）
         return os.path.dirname(exe)
     if getattr(sys, 'frozen', False):
         # PyInstaller（异常情况下 argv[0] 不可靠时的兜底）
@@ -38,9 +57,10 @@ is_running = False
 WIFI_NAME = ""
 LOGIN_URL = "http://59.68.177.9/api/account/login"
 PAYLOAD = {"username": "", "password": "", "nasId": "2"}
+_UA_OS = "Windows NT 10.0; Win64; x64" if sys.platform == "win32" else "X11; Linux x86_64"
 HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    "User-Agent": f"Mozilla/5.0 ({_UA_OS}) AppleWebKit/537.36"
 }
 
 # 初始化日志文件
@@ -69,14 +89,63 @@ def check_connectivity():
     except Exception:
         return False
 
+MONO_FONT = ("Consolas", 12) if sys.platform == "win32" else ("DejaVu Sans Mono", 12)
+
+def _run_silently(cmd):
+    """无窗口执行系统命令（Windows 下避免闪现控制台窗口）"""
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs)
+
+def _find_wireless_interface():
+    """Linux 下发现无线网卡接口名（iwctl 需要显式接口名）
+
+    首选内核 sysfs：/sys/class/net/<iface>/wireless 目录仅存在于无线设备上，
+    无需解析外部命令输出；失败时退化为解析 iwctl station list 首列。
+    """
+    try:
+        for name in sorted(os.listdir("/sys/class/net")):
+            if os.path.isdir(os.path.join("/sys/class/net", name, "wireless")):
+                return name
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(["iwctl", "station", "list"],
+                             capture_output=True, text=True, timeout=5)
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if parts and parts[0].lower().startswith(("wl", "wlp")):
+                return parts[0]
+    except Exception:
+        pass
+    return None
+
+def reconnect_linux():
+    """Linux：优先 nmcli（NetworkManager），缺失或失败时回退 iwctl（iwd）"""
+    if shutil.which("nmcli"):
+        result = subprocess.run(["nmcli", "device", "wifi", "connect", WIFI_NAME],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            return
+        log("ERROR", f"nmcli 重连失败: {result.stderr.strip()}")
+    if shutil.which("iwctl"):
+        iface = _find_wireless_interface()
+        if iface:
+            subprocess.run(["iwctl", "station", iface, "connect", WIFI_NAME],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            log("ERROR", "未找到无线网卡接口，iwctl 重连失败")
+    else:
+        log("ERROR", "未找到可用的重连后端 (nmcli/iwctl)，无法自动重连 Wi-Fi")
+
 def reconnect_wifi():
     """强制重连系统 Wi-Fi（无控制台窗口弹出）"""
     log("WARN", f"正在重连系统 Wi-Fi: {WIFI_NAME}")
-    subprocess.run(
-        ["netsh", "wlan", "connect", f"name={WIFI_NAME}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
+    if sys.platform == "win32":
+        _run_silently(["netsh", "wlan", "connect", f"name={WIFI_NAME}"])
+    else:
+        reconnect_linux()
     time.sleep(5)
 
 def perform_login():
@@ -186,9 +255,15 @@ def setup_gui():
     # 注意：Windows 下 iconbitmap 的 default= 形式无效，必须逐窗口设置
     def apply_window_icon(window):
         try:
-            icon_path = get_window_icon_path()
-            if icon_path:
-                window.iconbitmap(icon_path)
+            if sys.platform == "win32":
+                icon_path = get_window_icon_path()
+                if icon_path:
+                    window.iconbitmap(icon_path)
+            elif ImageTk is not None:
+                # Linux：iconbitmap 不支持 ico，改用 iconphoto + PIL 图像
+                photo = ImageTk.PhotoImage(create_tray_image())
+                window.iconphoto(True, photo)
+                window._iconphoto_ref = photo  # 必须保持引用，否则被垃圾回收
         except Exception:
             pass
 
@@ -229,7 +304,8 @@ def setup_gui():
     def start_monitoring():
         """启动后台服务"""
         global is_running
-        root.withdraw()
+        if pystray is not None:
+            root.withdraw()
         if not is_running:
             is_running = True
             threading.Thread(target=monitor_loop, daemon=True).start()
@@ -261,7 +337,7 @@ def setup_gui():
         log_win.geometry("640x420")
         apply_window_icon(log_win)
 
-        txt = ctk.CTkTextbox(log_win, font=("Consolas", 12), fg_color="#1e1e1e", text_color="#cccccc")
+        txt = ctk.CTkTextbox(log_win, font=MONO_FONT, fg_color="#1e1e1e", text_color="#cccccc")
         txt.pack(fill="both", expand=True, padx=10, pady=10)
 
         txt.tag_config("SYSTEM", foreground="#56b6c2")
@@ -342,13 +418,20 @@ def setup_gui():
         root.after(0, root.destroy)
 
     def run_tray():
+        if pystray is None:
+            log("ERROR", "托盘图标不可用，无法常驻托盘")
+            return
         menu = pystray.Menu(
             pystray.MenuItem("控制面板", on_show_window, default=True),
             pystray.MenuItem("查看日志", on_show_log),
             pystray.MenuItem("退出监控", on_quit)
         )
         icon = pystray.Icon("WiFiKeeper", create_tray_image(), "校园网守护", menu)
-        icon.run()
+        try:
+            icon.run()
+        except Exception:
+            log("ERROR", "托盘图标启动失败，窗口保持可见")
+            root.after(0, root.deiconify)
 
     threading.Thread(target=run_tray, daemon=True).start()
 
@@ -361,7 +444,8 @@ def setup_gui():
         PAYLOAD['nasId'] = config.get('nasId', '2')
 
         # 隐藏主窗口并直接开启监控任务
-        root.withdraw()
+        if pystray is not None:
+            root.withdraw()
         root.after(0, start_monitoring)
 
     root.mainloop()
