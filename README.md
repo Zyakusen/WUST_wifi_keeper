@@ -35,7 +35,7 @@
    - 自动重连需要 NetworkManager（`nmcli`）或 iwd（`iwctl`）之一，前者覆盖绝大多数发行版；`iwctl` 通常需要 root 或 iwd 授权组权限。
    - 界面中文由内置字体（Noto Sans SC 子集，SIL OFL 1.1）渲染，无需安装系统字体。
    - WSL/WSLg 下窗口**标题栏**由 WSLg 使用系统字体绘制，若乱码请执行 `sudo apt install fonts-noto-cjk`（窗口内部文字不受影响，仅标题栏需要系统字体）。
-3. Linux 托盘限制说明：二进制内置的托盘后端（X11/xorg）**不支持右键菜单**，左键单击图标可唤出窗口；请使用窗口内的"退出"按钮退出程序。源码运行时若安装了 `python3-gi` + AppIndicator，托盘菜单可用。WSL/WSLg 环境没有系统托盘，图标不会显示，程序会保持窗口常驻（属预期行为）。
+3. Linux 托盘限制说明：二进制内置的托盘后端（X11/xorg）**不支持右键菜单**，左键单击图标可唤出窗口；请使用窗口内的"退出"按钮退出程序。源码运行时若安装了 `python3-gi` + AppIndicator，托盘菜单可用。WSL/WSLg 环境没有系统托盘，程序会自动检测并保持窗口常驻（属预期行为，无报错输出）。
 4. 也可以源码方式运行（Debian/Ubuntu 需先装 tkinter）：
 
    ```bash
