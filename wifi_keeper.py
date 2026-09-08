@@ -500,7 +500,14 @@ def setup_gui():
             pystray.MenuItem("查看日志", on_show_log),
             pystray.MenuItem("退出监控", on_quit)
         )
-        icon = pystray.Icon("WiFiKeeper", create_tray_image(), "校园网守护", menu)
+        # xorg 后端（无菜单）的 set_wm_name 只支持 latin-1，中文标题会抛
+        # UnicodeEncodeError 导致托盘图标创建失败，故该后端使用英文标题
+        title = "校园网守护" if TRAY_HAS_MENU else "WiFiKeeper"
+        try:
+            icon = pystray.Icon("WiFiKeeper", create_tray_image(), title, menu)
+        except Exception:
+            log("ERROR", "托盘图标创建失败，窗口保持可见")
+            return
         tray_icon["icon"] = icon
         try:
             icon.run()
