@@ -100,6 +100,25 @@ CJK_FONT_CANDIDATES = (
 # 窗口保持可见并提供窗口内退出按钮（Windows 行为不变）
 TRAY_HAS_MENU = pystray is not None and getattr(pystray.Icon, "HAS_MENU", True)
 
+def _linux_has_systray():
+    """Linux：检测桌面是否存在 XEmbed 系统托盘
+
+    WSLg 和未装扩展的 GNOME 没有系统托盘，pystray xorg 后端会无限重试停靠
+    并向终端刷 Traceback，故先检测再决定是否启动托盘线程。
+    """
+    try:
+        from Xlib import display as xdisplay
+        d = xdisplay.Display()
+        try:
+            atom = d.intern_atom("_NET_SYSTEM_TRAY_S0")
+            owner = d.get_selection_owner(atom)
+            return owner != 0  # X.NONE == 0
+        finally:
+            d.close()
+    except Exception:
+        # 检测失败时不拦截，交给 pystray 自行处理
+        return True
+
 def _run_silently(cmd):
     """无窗口执行系统命令（Windows 下避免闪现控制台窗口）"""
     kwargs = {}
@@ -515,7 +534,10 @@ def setup_gui():
             log("ERROR", "托盘图标启动失败，窗口保持可见")
             root.after(0, root.deiconify)
 
-    threading.Thread(target=run_tray, daemon=True).start()
+    if sys.platform == "win32" or TRAY_HAS_MENU or _linux_has_systray():
+        threading.Thread(target=run_tray, daemon=True).start()
+    else:
+        log("WARN", "未检测到系统托盘，窗口保持常驻（WSLg 属预期行为）")
 
     # 静默启动校验
     if config.get('wifi_name') and config.get('username') and config.get('password'):
